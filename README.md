@@ -19,6 +19,7 @@ dataset/
 ```bash
 python src/train.py --data-root dataset --epochs 40 --batch-size 16 --lr 1e-4
 ```
+- sample run config: single RTX4090, 16GB VRAM, 40 epochs, batch size=16, lr=1e-4
 **Arguments:**
 - `--data-root`: Path to the root of your dataset folder.
 - `--epochs`: Total number of training passes (default 40).
