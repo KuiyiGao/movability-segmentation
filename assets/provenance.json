@@ -1,0 +1,14 @@
+{
+  "asset": "assets/report-predictions.png",
+  "sha256": "9b39dccdf2039af1e77cd69b1efb37097789824e4942d25d8288dd2594381f02",
+  "source_repository": "https://github.com/KuiyiGao/QuickMotionDetection",
+  "source_commit": "316c3881fe25c2f37aa30bc7f12ba721969a2438",
+  "source_file": "report-2.pdf",
+  "source_sha256": "376f206d540c3b0fe654b4d14f2417d2abcf0ac784ed9c4bd7b86f271aed1c5b",
+  "pdf_page_1based": 5,
+  "figure": "Figure 5",
+  "image_xref": 23,
+  "extraction": "Original embedded RGB image; source transparency mask is opaque",
+  "source_caption_context": "Report labels this prediction figure as after epoch 50",
+  "status": "Historical saved report artifact; no retraining or reproduction in maintenance checks"
+}

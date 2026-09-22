@@ -15,9 +15,9 @@ def parse_args():
 def main():
     args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = NewDeepLabV3(num_classes=4).to(device)
+    model = NewDeepLabV3(num_classes=4, pretrained=False).to(device)
     
-    checkpoint = torch.load(args.weights, map_location=device, weights_only=False)
+    checkpoint = torch.load(args.weights, map_location=device, weights_only=True)
     if isinstance(checkpoint, dict) and 'model' in checkpoint:
         model.load_state_dict(checkpoint['model'])
     else:
@@ -43,11 +43,12 @@ def main():
     plt.title("Original Image")
     plt.axis("off")
     plt.subplot(1, 2, 2)
-    plt.imshow(out_mask, cmap='gray')
+    plt.imshow(out_mask, cmap='gray', vmin=0, vmax=120)
     plt.title("Predicted Mask")
     plt.axis("off")
     plt.tight_layout()
     plt.savefig(args.output, dpi=300)
+    plt.close()
     print(f"Prediction successful. Saved to '{args.output}'")
 
 if __name__ == "__main__":

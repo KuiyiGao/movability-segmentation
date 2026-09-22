@@ -1,5 +1,7 @@
-torch 
-torchvision 
-pandas 
-matplotlib 
+numpy>=1.24
+Pillow>=10
+torch
+torchvision
+pandas
+matplotlib
 tensorboard

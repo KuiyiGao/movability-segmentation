@@ -1,122 +1,138 @@
-import argparse, os, time
-import torch, torch.nn as nn, torch.optim as optim
+import argparse
+from pathlib import Path
+
+import numpy as np
+import torch
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader
-from torch.utils.tensorboard import SummaryWriter
-from dataset import COCOStuffDataset, mean_iou
-from model import NewDeepLabV3, CombinedLoss
 from torchvision.utils import make_grid
 
+from dataset import COCOStuffDataset, confusion_matrix, mean_iou_from_confusion
+from model import NewDeepLabV3, CombinedLoss
+
+
 gray_lut = torch.tensor([0, 40, 80, 120], dtype=torch.uint8)
+
+
+def parse_ignore_label(value):
+    if value.lower() == "none":
+        return None
+    try:
+        label = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("Use none or an integer from 0 to 255") from error
+    if label not in range(256):
+        raise argparse.ArgumentTypeError("Use none or an integer from 0 to 255")
+    return label
+
+
 def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--data-root", required=True, help="Path to COCO-Stuff dataset")
-    p.add_argument("--epochs", type=int, default=40)
-    p.add_argument("--batch-size", type=int, default=16)
-    p.add_argument("--lr", type=float, default=1e-4)
-    p.add_argument("--weight-decay", type=float, default=1e-4)
-    p.add_argument("--log-dir", default="logs")
-    p.add_argument("--ckpt-dir", default="checkpoints")
-    return p.parse_args()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--data-root", required=True)
+    parser.add_argument("--mask-encoding", required=True, choices=["source", "movability"])
+    parser.add_argument("--source-ignore-label", type=parse_ignore_label, default=255)
+    parser.add_argument("--lut", type=Path)
+    parser.add_argument("--epochs", type=int, default=40)
+    parser.add_argument("--batch-size", type=int, default=16)
+    parser.add_argument("--lr", type=float, default=1e-4)
+    parser.add_argument("--weight-decay", type=float, default=1e-4)
+    parser.add_argument("--log-dir", default="logs")
+    parser.add_argument("--ckpt-dir", default="checkpoints")
+    parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument("--pretrained", action=argparse.BooleanOptionalAction, default=True)
+    args = parser.parse_args()
+    if args.epochs <= 0 or args.batch_size <= 0 or args.workers < 0:
+        parser.error("epochs/batch-size must be positive and workers must be nonnegative")
+    return args
 
 
 def compute_class_weights(loader, num_classes=4, eps=1e-6):
     pixel_count = torch.zeros(num_classes)
     for _, masks, _ in loader:
-        for c in range(num_classes):
-            pixel_count[c] += (masks == c).sum()
-    freq = pixel_count / pixel_count.sum()
-    med = torch.median(freq[freq > 0])
-    weights = med / (freq + eps)
-    return weights.tolist()
+        for class_id in range(num_classes):
+            pixel_count[class_id] += (masks == class_id).sum()
+    if pixel_count.sum() == 0:
+        raise ValueError("Training masks contain no valid class pixels")
+    frequency = pixel_count / pixel_count.sum()
+    median = torch.median(frequency[frequency > 0])
+    return (median / (frequency + eps)).tolist()
 
 
 def main():
     args = parse_args()
-    os.makedirs(args.log_dir, exist_ok=True)
-    os.makedirs(args.ckpt_dir, exist_ok=True)
+    from torch.utils.tensorboard import SummaryWriter
+
+    Path(args.log_dir).mkdir(parents=True, exist_ok=True)
+    Path(args.ckpt_dir).mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    train_set = COCOStuffDataset(args.data_root, "train")
-    val_set   = COCOStuffDataset(args.data_root, "val")
-    train_loader = DataLoader(train_set, args.batch_size, shuffle=True,
-                              num_workers=4, pin_memory=True)
-    val_loader   = DataLoader(val_set,   args.batch_size, shuffle=False,
-                              num_workers=4, pin_memory=True)
-
+    dataset_options = dict(mask_encoding=args.mask_encoding, source_ignore_label=args.source_ignore_label, lut_path=args.lut)
+    train_set = COCOStuffDataset(args.data_root, "train", **dataset_options)
+    val_set = COCOStuffDataset(args.data_root, "val", **dataset_options)
+    train_loader = DataLoader(train_set, args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=device == "cuda")
+    val_loader = DataLoader(val_set, args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=device == "cuda")
     class_weights = compute_class_weights(train_loader)
     print("Class weights:", class_weights)
-
-    model = NewDeepLabV3(num_classes=4).to(device)
+    model = NewDeepLabV3(num_classes=4, pretrained=args.pretrained).to(device)
     if torch.cuda.device_count() > 1:
         model = nn.DataParallel(model)
     criterion = CombinedLoss(class_weights).to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=args.lr,
-                            weight_decay=args.weight_decay)
+    optimizer = optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs)
-    scaler = torch.amp.GradScaler(device=device)
+    scaler = torch.amp.GradScaler(device, enabled=device == "cuda")
+    best_miou = float("-inf")
 
-    writer = SummaryWriter(args.log_dir)
-    best_miou = 0.0
-
-    for epoch in range(args.epochs):
-        model.train()
-        epoch_loss = 0.0
-
-        step = 0
-
-        for imgs, masks, _ in train_loader:
-            imgs, masks = imgs.to(device, non_blocking=True), masks.to(device, non_blocking=True)
-            optimizer.zero_grad(set_to_none=True)
-            with torch.cuda.amp.autocast():
-                outs = model(imgs)
-                loss = criterion(outs, masks)
-            scaler.scale(loss).backward()
-            scaler.step(optimizer)
-            scaler.update()
-            epoch_loss += loss.item()
-
-            step += 1
-            if step > 400:
-                break
-
-        scheduler.step()
-        writer.add_scalar("Loss/train", epoch_loss / len(train_loader), epoch)
-
-        model.eval()
-        val_loss, miou = 0.0, 0.0
-        with torch.no_grad():
-            for imgs, masks, _ in val_loader:
-                imgs, masks = imgs.to(device), masks.to(device)
-                outs = model(imgs)
-                val_loss += criterion(outs, masks).item()
-                preds = outs.argmax(1)
-                miou += mean_iou(preds, masks).item()
-        val_loss /= len(val_loader)
-        miou /= len(val_loader)
-
-
-        grid_img = make_grid(imgs.cpu()[:16])
-        gray_pred = gray_lut[preds[:16].cpu()]
-        grid_pred = make_grid(gray_pred.unsqueeze(1))
-        writer.add_image("val/image", grid_img, epoch)
-        writer.add_image("val/pred_mask", grid_pred, epoch)
-        writer.add_scalar("Loss/val",  val_loss, epoch)
-        writer.add_scalar("mIoU/val", miou, epoch)
-
-        if miou > best_miou:
-            best_miou = miou
-            torch.save({
-                "epoch": epoch,
-                "model": model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(),
-                "optimizer": optimizer.state_dict(),
-                "miou": best_miou,
-                "class_weights": class_weights
-            }, f"{args.ckpt_dir}/best.pth")
-        print(f"[{epoch+1}/{args.epochs}] "
-              f"loss={epoch_loss/len(train_loader):.4f} | "
-              f"val_loss={val_loss:.4f} | mIoU={miou:.4f}")
-
-    writer.close()
+    with SummaryWriter(args.log_dir) as writer:
+        for epoch in range(args.epochs):
+            model.train()
+            train_loss = 0.0
+            train_count = 0
+            for images, masks, _ in train_loader:
+                images, masks = images.to(device), masks.to(device)
+                optimizer.zero_grad(set_to_none=True)
+                with torch.autocast(device_type=device, enabled=device == "cuda"):
+                    outputs = model(images)
+                    loss = criterion(outputs, masks)
+                scaler.scale(loss).backward()
+                scaler.step(optimizer)
+                scaler.update()
+                train_loss += loss.item() * len(images)
+                train_count += len(images)
+            scheduler.step()
+            train_loss /= train_count
+            model.eval()
+            val_loss = 0.0
+            val_count = 0
+            counts = np.zeros((4, 4), dtype=np.int64)
+            with torch.no_grad():
+                for images, masks, _ in val_loader:
+                    images, masks = images.to(device), masks.to(device)
+                    outputs = model(images)
+                    val_loss += criterion(outputs, masks).item() * len(images)
+                    val_count += len(images)
+                    predictions = outputs.argmax(1)
+                    counts += confusion_matrix(predictions.cpu().numpy(), masks.cpu().numpy())
+            val_loss /= val_count
+            miou = mean_iou_from_confusion(counts)
+            writer.add_scalar("Loss/train", train_loss, epoch)
+            writer.add_scalar("Loss/val", val_loss, epoch)
+            writer.add_scalar("mIoU/val", miou, epoch)
+            writer.add_image("val/image", make_grid(images.cpu()[:16]), epoch)
+            writer.add_image("val/pred_mask", make_grid(gray_lut[predictions[:16].cpu()].unsqueeze(1)), epoch)
+            if miou > best_miou:
+                best_miou = miou
+                torch.save({
+                    "epoch": epoch,
+                    "model": model.module.state_dict() if isinstance(model, nn.DataParallel) else model.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "miou": best_miou,
+                    "class_weights": class_weights,
+                    "mask_encoding": args.mask_encoding,
+                    "source_ignore_label": args.source_ignore_label,
+                    "image_size": train_set.image_size,
+                    "lut": train_set.lut.tolist(),
+                }, Path(args.ckpt_dir) / "best.pth")
+            print(f"[{epoch + 1}/{args.epochs}] loss={train_loss:.4f} | val_loss={val_loss:.4f} | mIoU={miou:.4f}")
 
 
 if __name__ == "__main__":
