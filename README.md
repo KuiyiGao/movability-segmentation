@@ -42,7 +42,7 @@ dataset/
 - `source`: map IDs through the archived LUT. Confirm that your dataset uses the same source IDs before training.
 - `movability`: masks already contain IDs 0–3; do not apply the LUT again.
 
-The loader treats source value 255 as ignored by default. `--source-ignore-label none` instead applies every LUT entry literally, including the archived `255 → 0` mapping. This is an explicit policy in the newly added loader; the missing original loader's treatment of void labels is unknown. RGB colour masks and unmatched image/mask pairs are rejected. Images become RGB float tensors in `[0, 1]`; images and masks resize to 512 × 512, using bilinear and nearest-neighbour interpolation respectively.
+The loader treats source value 255 as ignored by default. `--source-ignore-label none` instead applies every LUT entry literally, including the archived `255 → 0` mapping. This is an explicit policy in the newly added loader; the missing original loader's treatment of void labels is unknown. RGB colour masks and unmatched image/mask pairs are rejected. Images become RGB float tensors in `[0, 1]`; by default, images and masks resize to 512 × 512, using bilinear and nearest-neighbour interpolation respectively.
 
 ## Training and inference
 
@@ -52,5 +52,7 @@ python src/infer.py --image test_image.jpg --weights checkpoints/best.pth --outp
 ```
 
 Training defaults to pretrained torchvision weights and can download them; use `--no-pretrained` for random initialization. Inference constructs the architecture without downloading weights and loads the supplied checkpoint. Checkpoints and the original train/validation split are not included.
+
+Use `--image-size HEIGHT WIDTH` to change the training resolution; the default remains 512 × 512. Inference uses the size saved in the checkpoint, or 512 × 512 for legacy checkpoints. Its `--image-size` option can override that size. Smaller synthetic inputs are useful for checking the software path; they do not reproduce the course experiment.
 
 The maintenance changes add the missing dataset module, preserve input spatial dimensions, exclude ignored pixels from both loss terms, and accumulate a validation-wide confusion matrix for mIoU. The original loader and full training environment were unavailable, so this code is a maintained starting point rather than an exact reproduction of the historical run.

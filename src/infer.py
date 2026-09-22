@@ -3,16 +3,27 @@ import torch
 import torchvision.transforms as T
 from PIL import Image
 import matplotlib.pyplot as plt
-from model import NewDeepLabV3
+
+
+def inference_image_size(checkpoint, override=None):
+    size = override
+    if size is None:
+        size = checkpoint.get("image_size", (512, 512)) if isinstance(checkpoint, dict) and "model" in checkpoint else (512, 512)
+    if not isinstance(size, (list, tuple)) or len(size) != 2 or any(type(value) is not int or value <= 0 for value in size):
+        raise ValueError("Image size must contain two positive integers (height, width)")
+    return tuple(size)
 
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--image", required=True, help="Path to the input image file")
     p.add_argument("--weights", required=True, help="Path to your trained model weights (e.g. checkpoints/best.pth)")
     p.add_argument("--output", default="output.png", help="Saved output image name")
+    p.add_argument("--image-size", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), help="Override the checkpoint image size; legacy checkpoints default to 512 512")
     return p.parse_args()
 
 def main():
+    from model import NewDeepLabV3
+
     args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = NewDeepLabV3(num_classes=4, pretrained=False).to(device)
@@ -23,8 +34,9 @@ def main():
     else:
         model.load_state_dict(checkpoint)
     model.eval()
+    image_size = inference_image_size(checkpoint, args.image_size)
     transform = T.Compose([
-        T.Resize((512, 512)),
+        T.Resize(image_size),
         T.ToTensor(),
     ])
     
@@ -49,7 +61,7 @@ def main():
     plt.tight_layout()
     plt.savefig(args.output, dpi=300)
     plt.close()
-    print(f"Prediction successful. Saved to '{args.output}'")
+    print(f"Prediction successful at {image_size[0]} x {image_size[1]}. Saved to '{args.output}'")
 
 if __name__ == "__main__":
     main()

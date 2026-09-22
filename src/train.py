@@ -33,6 +33,7 @@ def parse_args():
     parser.add_argument("--mask-encoding", required=True, choices=["source", "movability"])
     parser.add_argument("--source-ignore-label", type=parse_ignore_label, default=255)
     parser.add_argument("--lut", type=Path)
+    parser.add_argument("--image-size", type=int, nargs=2, metavar=("HEIGHT", "WIDTH"), default=(512, 512))
     parser.add_argument("--epochs", type=int, default=40)
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-4)
@@ -44,6 +45,8 @@ def parse_args():
     args = parser.parse_args()
     if args.epochs <= 0 or args.batch_size <= 0 or args.workers < 0:
         parser.error("epochs/batch-size must be positive and workers must be nonnegative")
+    if any(size <= 0 for size in args.image_size):
+        parser.error("image-size values must be positive")
     return args
 
 
@@ -66,7 +69,7 @@ def main():
     Path(args.log_dir).mkdir(parents=True, exist_ok=True)
     Path(args.ckpt_dir).mkdir(parents=True, exist_ok=True)
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    dataset_options = dict(mask_encoding=args.mask_encoding, source_ignore_label=args.source_ignore_label, lut_path=args.lut)
+    dataset_options = dict(mask_encoding=args.mask_encoding, source_ignore_label=args.source_ignore_label, lut_path=args.lut, image_size=tuple(args.image_size))
     train_set = COCOStuffDataset(args.data_root, "train", **dataset_options)
     val_set = COCOStuffDataset(args.data_root, "val", **dataset_options)
     train_loader = DataLoader(train_set, args.batch_size, shuffle=True, num_workers=args.workers, pin_memory=device == "cuda")
