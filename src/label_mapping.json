@@ -1,5 +1,5 @@
 {
-  "source_commit": "316c3881fe25c2f37aa30bc7f12ba721969a2438",
+  "source_commit": "0e999b0f2bcff03c1de1f4ae4683cdc8dd6eed17",
   "source_file": "src/lut_movability.npy",
   "source_sha256": "ec710d9c75812f8ecbf4207c8b8593a566dde8037b4857e86330a010b8ac8a65",
   "status": "Exact transcription of the archived lookup table; source IDs are not a newly validated semantic taxonomy.",
